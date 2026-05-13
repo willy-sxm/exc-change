@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.1
-// @description  EXC-Change v5.1: flusso avoir — USD sale → exchange → credit note → EUR sale chiusa con avoir · zero revenue duplicata
+// @version      5.2
+// @description  EXC-Change v5.2: credenziali API salvate localmente (mai nel codice) · setup guidato al primo avvio
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -22,21 +22,95 @@
     const LOG  = (...a) => console.log('%c[EXC]', 'color:#28a745;font-weight:bold', ...a);
     const WARN = (...a) => console.warn('%c[EXC]', 'color:#f0a500;font-weight:bold', ...a);
 
-    // ── Credenziali API ───────────────────────────────────────────────────────
-    const API_USER          = 'willy.ravanini@gmail.com';
-    const API_KEY           = 'VIWCLJBLVDXABMY9MSZ03B8Q4IJU8ROUZBX';
-    const API_BASE          = 'https://lipstick.hiboutik.com/api';
+    // ── Configurazione fissa (non sensibile) ─────────────────────────────────
+    const API_BASE               = 'https://lipstick.hiboutik.com/api';
     const GC_PRODUCT_ID          = 6613;  // Prodotto "Carte Cadeau" in Hiboutik
     const STORE_ID_DEFAULT       = '4';   // Marigot (usato per POST /sales)
     const PAYMENT_TYPE_BOUTIQUE  = '3';   // Boutique ID per GET /api/payment_types/
     const VENDOR_ID_DEFAULT      = '16';  // fallback (non usato se EUR sale letto correttamente)
 
-    // v5.0: nessun mapping USD→EUR. La vendita EUR viene chiusa con avoir (credit note),
-    // non con un tipo pagamento EUR. Statistiche e margini rimangono corretti.
+    // ── Credenziali API — salvate localmente, MAI nel codice ─────────────────
+    // Primo avvio: popup di setup. Reset: EXC_resetCredentials() in console.
+    function getCredentials() {
+        return {
+            user: GM_getValue('exc_api_user', ''),
+            key:  GM_getValue('exc_api_key',  '')
+        };
+    }
+
+    function showSetupModal() {
+        return new Promise((resolve) => {
+            document.getElementById('exc-setup-overlay')?.remove();
+            const overlay = document.createElement('div');
+            overlay.id = 'exc-setup-overlay';
+            overlay.style.cssText =
+                'position:fixed;inset:0;background:rgba(0,0,0,.65);z-index:999999;' +
+                'display:flex;align-items:center;justify-content:center';
+            overlay.innerHTML = `
+              <div style="background:#fff;border-radius:12px;padding:32px 36px;width:420px;
+                          font-family:system-ui,Arial;box-shadow:0 12px 48px rgba(0,0,0,.4)">
+                <div style="font-size:36px;text-align:center;margin-bottom:8px">🔑</div>
+                <h3 style="margin:0 0 4px;color:#6610f2;text-align:center">EXC-Change — Configuration</h3>
+                <p style="margin:0 0 20px;font-size:12px;color:#888;text-align:center">
+                  Les identifiants sont sauvegardés localement sur ce PC.<br>
+                  Ils ne sont jamais envoyés ailleurs.
+                </p>
+                <label style="font-size:12px;font-weight:bold;color:#444;display:block;margin-bottom:4px">
+                  Email Hiboutik
+                </label>
+                <input id="exc-setup-user" type="email" placeholder="email@exemple.com"
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:2px solid #dee2e6;
+                         border-radius:6px;font-size:14px;margin-bottom:12px;outline:none">
+                <label style="font-size:12px;font-weight:bold;color:#444;display:block;margin-bottom:4px">
+                  Clé API Hiboutik
+                </label>
+                <input id="exc-setup-key" type="password" placeholder="Clé API (Hiboutik → Mon compte → API)"
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:2px solid #dee2e6;
+                         border-radius:6px;font-size:14px;margin-bottom:20px;outline:none">
+                <button id="exc-setup-save" type="button"
+                  style="width:100%;padding:12px;border:none;background:#6610f2;color:#fff;
+                         border-radius:8px;cursor:pointer;font-weight:bold;font-size:15px">
+                  ✅ Sauvegarder et continuer
+                </button>
+                <p style="margin:12px 0 0;font-size:11px;color:#aaa;text-align:center">
+                  Pour réinitialiser : taper <code>EXC_resetCredentials()</code> dans la console
+                </p>
+              </div>`;
+            document.body.appendChild(overlay);
+
+            const uInput = overlay.querySelector('#exc-setup-user');
+            const kInput = overlay.querySelector('#exc-setup-key');
+            setTimeout(() => uInput.focus(), 50);
+
+            overlay.querySelector('#exc-setup-save').onclick = () => {
+                const u = uInput.value.trim();
+                const k = kInput.value.trim();
+                if (!u || !k) {
+                    [uInput, kInput].forEach(el => {
+                        if (!el.value.trim()) el.style.borderColor = '#dc3545';
+                    });
+                    return;
+                }
+                GM_setValue('exc_api_user', u);
+                GM_setValue('exc_api_key',  k);
+                overlay.remove();
+                LOG('✅ Credenziali salvate per', u);
+                resolve({ user: u, key: k });
+            };
+        });
+    }
+
+    // Esposto globalmente per reset da console
+    window.EXC_resetCredentials = () => {
+        GM_deleteValue('exc_api_user');
+        GM_deleteValue('exc_api_key');
+        LOG('🔑 Credenziali cancellate — ricarica la pagina per reinserirle');
+    };
 
     // ── Helper API Hiboutik (Basic Auth, form-encoded) ────────────────────────
     async function hiboutikAPI(method, path, data) {
-        const auth = btoa(`${API_USER}:${API_KEY}`);
+        const { user, key } = getCredentials();
+        const auth = btoa(`${user}:${key}`);
         const opts = { method, headers: { 'Authorization': `Basic ${auth}` } };
         if (data && method !== 'GET') {
             opts.headers['Content-Type'] = 'application/x-www-form-urlencoded';
@@ -66,6 +140,17 @@
         ['input', 'change', 'blur'].forEach(ev =>
             input.dispatchEvent(new Event(ev, { bubbles: true, cancelable: true }))
         );
+    }
+
+    // ── Check credenziali all'avvio ───────────────────────────────────────────
+    async function ensureCredentials() {
+        const { user, key } = getCredentials();
+        if (!user || !key) {
+            LOG('🔑 Credenziali mancanti — mostro setup');
+            await showSetupModal();
+        } else {
+            LOG('🔑 Credenziali caricate per:', user);
+        }
     }
 
     // ════════════════════════════════════════════════════════════════════════════
@@ -589,7 +674,6 @@
             WARN('Discovery payment_types:', e.message);
         }
     }
-    discoverPaymentTypes();
 
     // ── Iniezione bottoni ─────────────────────────────────────────────────────
     function findUSDContainer()      { return document.querySelector('div.boutons_payement_numpad'); }
@@ -656,9 +740,12 @@
         injectGiftCardButton();
     }
 
-    // Iniezione iniziale + observer DOM
-    tryInject();
-    [100, 500, 1500].forEach(ms => setTimeout(tryInject, ms));
+    // Iniezione iniziale + observer DOM (dopo check credenziali)
+    ensureCredentials().then(() => {
+        discoverPaymentTypes();
+        tryInject();
+        [100, 500, 1500].forEach(ms => setTimeout(tryInject, ms));
+    });
 
     const domObs = new MutationObserver(() => {
         if (domObs._t) return;
