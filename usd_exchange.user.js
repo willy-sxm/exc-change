@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.2
-// @description  EXC-Change v5.2: credenziali API salvate localmente (mai nel codice) · setup guidato al primo avvio
+// @version      5.4
+// @description  EXC-Change v5.4: vendita EUR resta aperta dopo USD (chiusura manuale) · bottoni sotto Ouverture tiroir · redirect CARTE
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -192,6 +192,19 @@
             )).find(el => new RegExp(keyword, 'i').test(el.textContent || ''));
         }
 
+        // Trova il container padre che contiene l'heading (form, .panel, .card, section, div)
+        function findSectionContainer(heading) {
+            let el = heading.parentElement;
+            for (let i = 0; i < 8; i++) {
+                if (!el || el === document.body) break;
+                const inputs = el.querySelectorAll('input:not([type="hidden"]):not([type="submit"]):not([type="button"]):not([type="checkbox"]):not([type="radio"])');
+                const btns   = el.querySelectorAll('button[type="submit"], input[type="submit"], button:not([type="button"])');
+                if (inputs.length > 0 && btns.length > 0) return el;
+                el = el.parentElement;
+            }
+            return null;
+        }
+
         // Riempie il form "Utiliser une carte cadeau" e clicca Valider
         function tryFillUtiliser(retries) {
             retries = retries || 0;
@@ -209,30 +222,28 @@
             const utiliserHead = findHeading('utiliser');
             if (!utiliserHead) { setTimeout(() => tryFillUtiliser(retries + 1), 400); return; }
 
-            // Scroll verso Utiliser (è in basso nella pagina)
+            // Scroll verso Utiliser
             utiliserHead.scrollIntoView({ behavior: 'smooth', block: 'center' });
 
-            // Primo input di qualunque tipo (non hidden/submit/button/radio/date)
-            // che compare DOPO l'heading "Utiliser" nel DOM
-            const AFTER = Node.DOCUMENT_POSITION_FOLLOWING;
+            // Cerca input e bottone nel container PADRE dell'heading Utiliser
+            // — evita di pescare campi del form Vendre
+            const container = findSectionContainer(utiliserHead);
+            if (!container) { setTimeout(() => tryFillUtiliser(retries + 1), 400); return; }
+
             const excluded = ['hidden', 'submit', 'button', 'checkbox', 'radio', 'date'];
-
-            const codeInput = Array.from(document.querySelectorAll('input')).find(inp =>
-                !excluded.includes(inp.type) &&
-                (utiliserHead.compareDocumentPosition(inp) & AFTER) !== 0
+            const codeInput  = Array.from(container.querySelectorAll('input'))
+                .find(inp => !excluded.includes(inp.type));
+            const validerBtn = container.querySelector(
+                'button[type="submit"], input[type="submit"], button:not([type="button"])'
             );
-
-            // Primo bottone/submit dopo l'heading Utiliser
-            const validerBtn = Array.from(
-                document.querySelectorAll('button, input[type="submit"]')
-            ).find(b => (utiliserHead.compareDocumentPosition(b) & AFTER) !== 0);
 
             if (!codeInput || !validerBtn) {
                 setTimeout(() => tryFillUtiliser(retries + 1), 400);
                 return;
             }
 
-            LG('✅ Form Utiliser | input:', codeInput.placeholder || codeInput.name,
+            LG('✅ Form Utiliser | container:', container.tagName, container.className?.slice(0,40),
+               '| input:', codeInput.placeholder || codeInput.name,
                '| valider:', validerBtn.textContent?.trim() || validerBtn.value);
 
             setVal(codeInput, code);
@@ -256,15 +267,27 @@
                         GM_setValue('exc_completed', JSON.stringify({ code }));
                         GM_deleteValue('exc_pending_code');
                         GM_deleteValue('exc_iframe_step');
+                        // Opzione A: redirect automatico alla vendita su lipstick.hiboutik.com
+                        const saleIdParam = new URLSearchParams(location.search).get('sale_id');
+                        const returnUrl = saleIdParam
+                            ? `https://lipstick.hiboutik.com/ventes/${saleIdParam}`
+                            : 'https://lipstick.hiboutik.com/';
+                        LG('↩️ Redirect → ', returnUrl);
+                        setTimeout(() => { window.location.href = returnUrl; }, 1200);
                     }
                 });
                 obs.observe(document.body, { childList: true, subtree: true });
-                // Safety: dopo 8s considera comunque done
+                // Safety: dopo 8s considera comunque done e redirect
                 setTimeout(() => {
                     if (!signaled) {
                         signaled = true;
                         obs.disconnect();
                         GM_setValue('exc_completed', JSON.stringify({ code }));
+                        const saleIdParam = new URLSearchParams(location.search).get('sale_id');
+                        const returnUrl = saleIdParam
+                            ? `https://lipstick.hiboutik.com/ventes/${saleIdParam}`
+                            : 'https://lipstick.hiboutik.com/';
+                        setTimeout(() => { window.location.href = returnUrl; }, 500);
                     }
                 }, 8000);
             }, 800);
@@ -389,21 +412,26 @@
             'position:fixed;inset:0;background:rgba(0,0,0,.5);' +
             'z-index:99999;display:flex;align-items:center;justify-content:center';
         overlay.innerHTML = `
-          <div style="background:#fff;border-radius:12px;padding:28px 32px;width:400px;
+          <div style="background:#fff;border-radius:12px;padding:28px 32px;width:420px;
                       font-family:system-ui,Arial;box-shadow:0 12px 48px rgba(0,0,0,.35);text-align:center">
             <div style="font-size:52px;margin-bottom:10px">✅</div>
-            <h3 style="margin:0 0 8px;color:#28a745;font-size:20px">Pagamento USD completato</h3>
+            <h3 style="margin:0 0 8px;color:#28a745;font-size:20px">Paiement USD enregistré</h3>
             <div style="background:#f6f8fa;padding:12px;border-radius:8px;font-size:13px;
-                        line-height:1.8;margin-bottom:20px;text-align:left">
-              <b>Vendita USD:</b> #${usdSaleId}<br>
-              <b>Importo:</b> ${parseFloat(amount).toFixed(2)} USD<br>
-              <b>Metodo USD:</b> ${method}<br>
-              <b>Avoir applicato:</b> <code>${avoirCode}</code>
+                        line-height:1.8;margin-bottom:16px;text-align:left">
+              <b>Vente USD :</b> #${usdSaleId}<br>
+              <b>Montant :</b> ${parseFloat(amount).toFixed(2)} USD<br>
+              <b>Méthode :</b> ${method}<br>
+              <b>Avoir appliqué :</b> <code>${avoirCode}</code>
+            </div>
+            <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:8px;
+                        padding:10px 14px;font-size:13px;color:#795548;margin-bottom:20px">
+              ⚠️ La vente EUR est encore ouverte.<br>
+              Vous pouvez modifier, puis <b>clôturer manuellement</b>.
             </div>
             <button id="exc-done" type="button"
               style="padding:12px 36px;border:none;background:#28a745;color:#fff;
                      border-radius:8px;cursor:pointer;font-weight:bold;font-size:16px">
-              Chiudi ✓
+              OK — Continuer ✓
             </button>
           </div>`;
         document.body.appendChild(overlay);
@@ -536,15 +564,13 @@
             });
             LOG('✅ Avoir applicato alla vendita EUR');
 
-            // ── STEP 8: Chiudi vendita EUR ────────────────────────────────────
-            LOG('📋 Step 8 — Chiudo vendita EUR', saleId);
-            await hiboutikAPI('POST', '/sales/close/', { sale_id: saleId });
-            LOG('✅ Vendita EUR chiusa');
+            // ── Step 8 rimosso: la vendita EUR viene chiusa manualmente dal cassiere ──
+            // Il cassiere può ancora aggiungere prodotti o modificare prima di chiudere.
 
             // ── Conferma ─────────────────────────────────────────────────────
             showFinalConfirmation(usdSaleId, amountStr, method, creditNoteCode);
-            LOG('🎉 Completato | USD sale:', usdSaleId, '| EUR sale:', saleId,
-                '| method:', method, '| avoir:', creditNoteCode);
+            LOG('🎉 USD completato | USD sale:', usdSaleId, '| EUR sale:', saleId,
+                '| method:', method, '| avoir:', creditNoteCode, '| chiusura EUR: manuale');
 
         } catch (e) {
             WARN('❌ Errore flusso USD v5.0:', e.message);
@@ -676,24 +702,36 @@
     }
 
     // ── Iniezione bottoni ─────────────────────────────────────────────────────
-    function findUSDContainer()      { return document.querySelector('div.boutons_payement_numpad'); }
-    function findGiftCardBtnAnchor() { return document.getElementById('btn_paiement_div'); }
-    function shouldShow() {
-        return !!document.querySelector('div.boutons_payement_numpad, button[id^="btn_paiement_"]');
+
+    // Trova il bottone "Ouverture tiroir" per ancorare i nostri bottoni sotto di lui
+    function findOuvertureTiroir() {
+        return Array.from(document.querySelectorAll('button, a')).find(el =>
+            /ouverture.{0,6}tiroir/i.test(el.textContent || '')
+        );
     }
+
+    function shouldShow() {
+        return !!(findOuvertureTiroir() ||
+                  document.querySelector('div.boutons_payement_numpad, button[id^="btn_paiement_"]'));
+    }
+
+    // Stile coerente con gli altri bottoni del pannello destro di Hiboutik
+    const BTN_BASE =
+        'display:block;width:100%;padding:10px 16px;margin-top:6px;' +
+        'border-radius:6px;cursor:pointer;font-weight:bold;font-size:14px;' +
+        'text-align:center;border:2px solid;';
 
     function injectUSDButton() {
         if (document.getElementById('exc-usd-btn')) return;
-        const container = findUSDContainer();
-        if (!container) return;
+        const anchor = findOuvertureTiroir();
+        if (!anchor) return;
 
         const btn = document.createElement('button');
         btn.id        = 'exc-usd-btn';
         btn.type      = 'button';
-        btn.innerHTML = '💵 USD';
-        btn.style.cssText =
-            'background:#28a745;color:white;padding:6px 14px;border:none;' +
-            'border-radius:4px;cursor:pointer;font-weight:bold;margin:2px;font-size:13px';
+        btn.innerHTML = '💵 EXC — Paiement USD';
+        btn.style.cssText = BTN_BASE +
+            'background:#28a745;color:#fff;border-color:#28a745;';
 
         btn.onclick = async () => {
             const saleId = getSaleId();
@@ -706,25 +744,27 @@
             const method = await askUSDMethod(amount);
             if (!method) return;
             btn.disabled  = true;
-            btn.innerHTML = '⏳';
+            btn.innerHTML = '⏳ Traitement…';
             try   { await processUSDPayment(saleId, amount, method); }
-            finally { btn.disabled = false; btn.innerHTML = '💵 USD'; }
+            finally { btn.disabled = false; btn.innerHTML = '💵 EXC — Paiement USD'; }
         };
 
-        container.appendChild(btn);
-        LOG('Bottone 💵 USD iniettato');
+        anchor.insertAdjacentElement('afterend', btn);
+        LOG('Bottone 💵 USD iniettato dopo Ouverture tiroir');
     }
 
     function injectGiftCardButton() {
         if (document.getElementById('exc-gc-btn')) return;
-        const anchor = findGiftCardBtnAnchor() || document.getElementById('exc-usd-btn');
+        const usdBtn = document.getElementById('exc-usd-btn');
+        const anchor = usdBtn || findOuvertureTiroir();
         if (!anchor) return;
 
         const btn = document.createElement('button');
         btn.id        = 'exc-gc-btn';
         btn.type      = 'button';
-        btn.innerHTML = '🎁 CARTE';
-        btn.className = 'btn-lg m-t-xs btn btn-warning';
+        btn.innerHTML = '🎁 Utiliser carte cadeau';
+        btn.style.cssText = BTN_BASE +
+            'background:#fff;color:#e67e22;border-color:#e67e22;';
         btn.onclick   = () => showGiftCardPopup(getSaleId());
 
         anchor.insertAdjacentElement('afterend', btn);
