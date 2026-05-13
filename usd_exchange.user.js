@@ -780,16 +780,103 @@
         injectGiftCardButton();
     }
 
-    // Iniezione iniziale + observer DOM (dopo check credenziali)
+    // ── Watcher pagina Gift Card — auto-fill Utiliser + click Retour Vente ───
+    function findRetourVenteBtn() {
+        return Array.from(document.querySelectorAll('a,button')).find(el =>
+            /retour.{0,4}vente/i.test(el.textContent || '')
+        );
+    }
+
+    function isOnGiftCardPage() {
+        return !!Array.from(document.querySelectorAll('h1,h2,h3,h4')).find(el =>
+            /vendre.{0,6}carte|utiliser.{0,6}carte/i.test(el.textContent || '')
+        );
+    }
+
+    function watchGiftCardPage() {
+        if (!isOnGiftCardPage()) return;
+        const code = GM_getValue('exc_pending_code', null);
+        LOG('🎁 Pagina gift card rilevata | exc_pending_code:', code);
+
+        // ── Auto-fill form Utiliser se c'è un codice in attesa ───────────────
+        if (code) {
+            let filled = false;
+            function tryFillUtiliserMain(retries) {
+                retries = retries || 0;
+                if (retries > 40 || filled) return;
+
+                const utiliserHead = Array.from(document.querySelectorAll(
+                    'h1,h2,h3,h4,h5,legend,.panel-title,.card-title'
+                )).find(el => /utiliser/i.test(el.textContent || ''));
+                if (!utiliserHead) { setTimeout(() => tryFillUtiliserMain(retries + 1), 300); return; }
+
+                // Risale al container padre che contiene input + bottone
+                let container = utiliserHead.parentElement;
+                for (let i = 0; i < 8; i++) {
+                    if (!container || container === document.body) break;
+                    const inp = container.querySelector('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
+                    const btn = container.querySelector('button[type="submit"],input[type="submit"],button:not([type="button"])');
+                    if (inp && btn) {
+                        filled = true;
+                        LOG('🎁 Fill Utiliser | input:', inp.name || inp.placeholder);
+                        setVal(inp, code);
+                        setTimeout(() => {
+                            setVal(inp, code);
+                            btn.click();
+                            GM_deleteValue('exc_pending_code');
+                            GM_deleteValue('exc_iframe_step');
+                        }, 600);
+                        return;
+                    }
+                    container = container.parentElement;
+                }
+                setTimeout(() => tryFillUtiliserMain(retries + 1), 300);
+            }
+            setTimeout(() => tryFillUtiliserMain(0), 800);
+        }
+
+        // ── Watcher successo → click Retour Vente ────────────────────────────
+        let redirected = false;
+        const gcObs = new MutationObserver(() => {
+            if (redirected) return;
+            const ok = document.querySelector('.alert-success, .flash-success, [class*="success"]:not(button)');
+            if (ok && /utilisée|appliqué|succès|success|ok/i.test(ok.textContent || '')) {
+                redirected = true;
+                gcObs.disconnect();
+                LOG('✅ Gift card utilisée — click Retour Vente dans 1.2s');
+                setTimeout(() => {
+                    const retourBtn = findRetourVenteBtn();
+                    if (retourBtn) {
+                        LOG('↩️ Click Retour Vente');
+                        retourBtn.click();
+                    } else {
+                        LOG('↩️ Retour Vente non trovato — popup manuale');
+                        const n = document.createElement('div');
+                        n.style.cssText =
+                            'position:fixed;bottom:20px;right:20px;background:#28a745;color:#fff;' +
+                            'padding:14px 20px;border-radius:8px;font-family:system-ui;font-weight:bold;' +
+                            'font-size:14px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3);cursor:pointer';
+                        n.innerHTML = '✅ Carte appliquée !<br><small>Cliquez "Retour Vente"</small>';
+                        document.body.appendChild(n);
+                        setTimeout(() => n.remove(), 8000);
+                    }
+                }, 1200);
+            }
+        });
+        gcObs.observe(document.body, { childList: true, subtree: true });
+    }
+
+    // ── Iniezione iniziale + observer DOM (dopo check credenziali) ────────────
     ensureCredentials().then(() => {
         discoverPaymentTypes();
         tryInject();
+        watchGiftCardPage();
         [100, 500, 1500].forEach(ms => setTimeout(tryInject, ms));
     });
 
     const domObs = new MutationObserver(() => {
         if (domObs._t) return;
-        domObs._t = setTimeout(() => { domObs._t = null; tryInject(); }, 250);
+        domObs._t = setTimeout(() => { domObs._t = null; tryInject(); watchGiftCardPage(); }, 250);
     });
     domObs.observe(document.body, { childList: true, subtree: true });
 
@@ -797,8 +884,12 @@
 
     let lastHref = location.href;
     setInterval(() => {
-        if (location.href !== lastHref) { lastHref = location.href; tryInject(); }
+        if (location.href !== lastHref) {
+            lastHref = location.href;
+            tryInject();
+            setTimeout(watchGiftCardPage, 500);
+        }
     }, 800);
 
-    LOG('UserScript v5.0 (EXC-Change) attivo — flusso avoir: USD sale → exchange → credit note → EUR sale chiusa');
+    LOG('UserScript v5.4 (EXC-Change) attivo — USD sale · avoir · chiusura EUR manuale');
 })();
