@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.8
-// @description  EXC-Change v5.8: fix currency.hiboutik.net (nuovo URL gift card Hiboutik)
+// @version      5.9
+// @description  EXC-Change v5.9: bottone carte cadeau disabilitato temporaneamente
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -788,6 +788,7 @@
     }
 
     function injectGiftCardButton() {
+        return; // v5.9: disabilitato temporaneamente (currency.hiboutik.net da investigare)
         if (document.getElementById('exc-gc-btn')) return;
         const usdBtn = document.getElementById('exc-usd-btn');
         const anchor = usdBtn || findOuvertureTiroir();
