@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.10
-// @description  EXC-Change v5.10: store ID dinamico (segue il depot attivo)
+// @version      5.12
+// @description  EXC-Change v5.12: S/N = EXC-{eurSaleId} sul prodotto USD + store_id da vendita EUR
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -461,25 +461,27 @@
 
         LOG('🚀 Flusso USD v5.1 (avoir) | EUR sale:', saleId, '| amount:', amountStr, '| method:', method);
 
-        // ── STEP 0: Leggo vendor_id dalla vendita EUR ─────────────────────────
-        LOG('📋 Step 0 — Leggo vendor_id dalla vendita EUR', saleId, '...');
+        // ── STEP 0: Leggo vendor_id e store_id dalla vendita EUR ─────────────
+        LOG('📋 Step 0 — Leggo vendor_id + store_id dalla vendita EUR', saleId, '...');
         let vendorId = getVendorId(); // fallback DOM
+        let storeId  = getStoreId(); // fallback navbar/default
         try {
             const eurSale = await hiboutikAPI('GET', `/sales/${saleId}`, null);
-            const raw = eurSale?.vendor_id
-                     || eurSale?.[0]?.vendor_id
-                     || eurSale?.sale?.vendor_id;
-            if (raw) { vendorId = String(raw); LOG('✅ vendor_id letto dalla vendita EUR:', vendorId); }
-            else { WARN('vendor_id non trovato nella risposta EUR sale — uso fallback DOM:', vendorId); }
+            const s = eurSale?.[0] || eurSale?.sale || eurSale;
+            const rawVendor = s?.vendor_id;
+            const rawStore  = s?.store_id || s?.boutique_id;
+            if (rawVendor) { vendorId = String(rawVendor); LOG('✅ vendor_id dalla vendita EUR:', vendorId); }
+            else { WARN('vendor_id non trovato — uso fallback:', vendorId); }
+            if (rawStore)  { storeId  = String(rawStore);  LOG('✅ store_id dalla vendita EUR:', storeId); }
+            else { WARN('store_id non trovato — uso fallback:', storeId); }
         } catch (e) {
-            WARN('Impossibile leggere EUR sale — uso fallback DOM:', vendorId, '| err:', e.message);
+            WARN('Impossibile leggere EUR sale — uso fallback:', e.message);
         }
 
         showProcessingOverlay(amount, method);
 
         try {
             // ── STEP 1: Crea vendita USD ──────────────────────────────────────
-            const storeId = getStoreId();
             LOG('📋 Step 1 — Creo vendita USD (store:', storeId, ')...');
             const saleRes = await hiboutikAPI('POST', '/sales/', {
                 store_id:      storeId,
@@ -497,7 +499,8 @@
                 product_id:       GC_PRODUCT_ID,
                 product_price:    amountStr,
                 quantity:         1,
-                stock_withdrawal: 1
+                stock_withdrawal: 1,
+                product_serial:   'EXC-' + saleId
             });
             // line_item_id può essere in vari campi a seconda versione API
             const lineItemId = productRes?.id_sale_product_detail
