@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.9
-// @description  EXC-Change v5.9: bottone carte cadeau disabilitato temporaneamente
+// @version      5.10
+// @description  EXC-Change v5.10: store ID dinamico (segue il depot attivo)
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -318,9 +318,18 @@
     }
 
     function getStoreId() {
+        // 1. Attributi DOM espliciti
         const el = document.querySelector('[data-store-id],[data-boutique-id],input[name="store_id"]');
         if (el?.value) return el.value;
-        return new URLSearchParams(location.search).get('store_id') || STORE_ID_DEFAULT;
+        // 2. URL parameter
+        const urlStore = new URLSearchParams(location.search).get('store_id');
+        if (urlStore) return urlStore;
+        // 3. Header Hiboutik: legge "(0) Depot" o "(4) Marigot" dal testo della navbar
+        const headerText = document.querySelector('nav, .navbar, header, #topbar')?.textContent || '';
+        const m = headerText.match(/\((\d+)\)/);
+        if (m) return m[1];
+        // 4. Fallback hardcoded
+        return STORE_ID_DEFAULT;
     }
 
     function getVendorId() {
@@ -470,9 +479,10 @@
 
         try {
             // ── STEP 1: Crea vendita USD ──────────────────────────────────────
-            LOG('📋 Step 1 — Creo vendita USD (store:', STORE_ID_DEFAULT, ')...');
+            const storeId = getStoreId();
+            LOG('📋 Step 1 — Creo vendita USD (store:', storeId, ')...');
             const saleRes = await hiboutikAPI('POST', '/sales/', {
-                store_id:      STORE_ID_DEFAULT,
+                store_id:      storeId,
                 currency_code: 'USD',
                 vendor_id:     vendorId
             });
@@ -530,7 +540,7 @@
                 // Fallback: GET /credit_notes/ e prendo il più recente
                 LOG('📋 Step 6 fallback — avoir_id non in risposta, recupero credit notes...');
                 await new Promise(r => setTimeout(r, 1200));
-                const creditNotes = await hiboutikAPI('GET', `/credit_notes/${STORE_ID_DEFAULT}`, null);
+                const creditNotes = await hiboutikAPI('GET', `/credit_notes/${storeId}`, null);
                 if (!Array.isArray(creditNotes) || creditNotes.length === 0)
                     throw new Error('Nessun avoir trovato. Risposta: ' + JSON.stringify(creditNotes));
                 // Campo reale: "credit_note" (non credit_note_code)
