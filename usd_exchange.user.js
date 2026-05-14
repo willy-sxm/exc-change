@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.4
-// @description  EXC-Change v5.4: vendita EUR resta aperta dopo USD (chiusura manuale) · bottoni sotto Ouverture tiroir · redirect CARTE
+// @version      5.7
+// @description  EXC-Change v5.7: bottone CARTE usa iframe nascosto · zero navigazione · toast verde/rosso
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -206,95 +206,83 @@
         }
 
         // Riempie il form "Utiliser une carte cadeau" e clicca Valider
+        // Selettori precisi: form con hidden action=use_cc → input#code_cc → button[type=submit]
         function tryFillUtiliser(retries) {
             retries = retries || 0;
-
-            // Dopo 60 tentativi mostra banner manuale
             if (retries > 60) {
-                LG('Form Utiliser non trovato — banner manuale');
-                showBanner(
-                    `✅ EXC-Change — Inserisci <b>${code}</b> nel campo "Utiliser" e clicca <b>Valider</b>`,
-                    '#28a745'
-                );
+                LG('Form Utiliser non trovato dopo 60 tentativi');
+                GM_setValue('exc_error', 'Form Utiliser non trovato');
+                GM_deleteValue('exc_pending_code');
+                GM_deleteValue('exc_iframe_step');
                 return;
             }
 
-            const utiliserHead = findHeading('utiliser');
-            if (!utiliserHead) { setTimeout(() => tryFillUtiliser(retries + 1), 400); return; }
+            // Trova il form Utiliser tramite il campo hidden action=use_cc
+            const utiliserForm = document.querySelector(
+                'form input[name="action"][value="use_cc"]'
+            )?.closest('form');
+            if (!utiliserForm) { setTimeout(() => tryFillUtiliser(retries + 1), 300); return; }
 
-            // Scroll verso Utiliser
-            utiliserHead.scrollIntoView({ behavior: 'smooth', block: 'center' });
-
-            // Cerca input e bottone nel container PADRE dell'heading Utiliser
-            // — evita di pescare campi del form Vendre
-            const container = findSectionContainer(utiliserHead);
-            if (!container) { setTimeout(() => tryFillUtiliser(retries + 1), 400); return; }
-
-            const excluded = ['hidden', 'submit', 'button', 'checkbox', 'radio', 'date'];
-            const codeInput  = Array.from(container.querySelectorAll('input'))
-                .find(inp => !excluded.includes(inp.type));
-            const validerBtn = container.querySelector(
-                'button[type="submit"], input[type="submit"], button:not([type="button"])'
-            );
+            const codeInput  = utiliserForm.querySelector('#code_cc') ||
+                               utiliserForm.querySelector('input[type="text"]');
+            const validerBtn = utiliserForm.querySelector('button[type="submit"]');
 
             if (!codeInput || !validerBtn) {
-                setTimeout(() => tryFillUtiliser(retries + 1), 400);
+                setTimeout(() => tryFillUtiliser(retries + 1), 300);
                 return;
             }
 
-            LG('✅ Form Utiliser | container:', container.tagName, container.className?.slice(0,40),
-               '| input:', codeInput.placeholder || codeInput.name,
-               '| valider:', validerBtn.textContent?.trim() || validerBtn.value);
+            LG('✅ Form Utiliser trovato | input:', codeInput.id, '| btn:', validerBtn.textContent?.trim());
 
-            setVal(codeInput, code);
+            // Cleanup GM prima del submit
+            GM_deleteValue('exc_pending_code');
+            GM_deleteValue('exc_iframe_step');
+
+            codeInput.value = code;
+            codeInput.dispatchEvent(new Event('input', { bubbles: true }));
 
             setTimeout(() => {
-                setVal(codeInput, code); // re-fill (AngularJS può azzerare)
-                LG('🤖 Auto-click Valider (Utiliser) | code:', code);
+                codeInput.value = code; // re-set sicurezza
+                LG('🤖 Click Valider | code:', code);
                 validerBtn.click();
 
-                // Observer: rileva successo e segnala pagina principale
+                // Observer: rileva successo O errore → segnala pagina principale
                 let signaled = false;
                 const obs = new MutationObserver(() => {
                     if (signaled) return;
-                    const ok = document.querySelector(
-                        '.alert-success, .flash-success, [class*="success"]:not(button)'
-                    );
-                    if (ok && /utilisée|appliqué|success|succès|ok/i.test(ok.textContent)) {
-                        signaled = true;
-                        obs.disconnect();
+
+                    // Successo
+                    const ok = document.querySelector('.alert-success, [class*="alert-success"]');
+                    if (ok && /utilisée|appliqué|succès|success/i.test(ok.textContent || '')) {
+                        signaled = true; obs.disconnect();
                         LG('✅ Utiliser completato!');
                         GM_setValue('exc_completed', JSON.stringify({ code }));
-                        GM_deleteValue('exc_pending_code');
-                        GM_deleteValue('exc_iframe_step');
-                        // Opzione A: redirect automatico alla vendita su lipstick.hiboutik.com
-                        const saleIdParam = new URLSearchParams(location.search).get('sale_id');
-                        const returnUrl = saleIdParam
-                            ? `https://lipstick.hiboutik.com/ventes/${saleIdParam}`
-                            : 'https://lipstick.hiboutik.com/';
-                        LG('↩️ Redirect → ', returnUrl);
-                        setTimeout(() => { window.location.href = returnUrl; }, 1200);
+                        return;
+                    }
+                    // Errore (es. "Carte cadeau inexistante")
+                    const err = document.querySelector('.alert-danger, [class*="alert-danger"]');
+                    if (err && err.textContent?.trim()) {
+                        signaled = true; obs.disconnect();
+                        LG('❌ Errore Utiliser:', err.textContent.trim());
+                        GM_setValue('exc_error', err.textContent.trim());
                     }
                 });
                 obs.observe(document.body, { childList: true, subtree: true });
-                // Safety: dopo 8s considera comunque done e redirect
+
+                // Safety timeout 8s
                 setTimeout(() => {
                     if (!signaled) {
-                        signaled = true;
-                        obs.disconnect();
-                        GM_setValue('exc_completed', JSON.stringify({ code }));
-                        const saleIdParam = new URLSearchParams(location.search).get('sale_id');
-                        const returnUrl = saleIdParam
-                            ? `https://lipstick.hiboutik.com/ventes/${saleIdParam}`
-                            : 'https://lipstick.hiboutik.com/';
-                        setTimeout(() => { window.location.href = returnUrl; }, 500);
+                        signaled = true; obs.disconnect();
+                        // Controlla un'ultima volta prima di dare errore generico
+                        const err = document.querySelector('.alert-danger');
+                        if (err?.textContent?.trim()) {
+                            GM_setValue('exc_error', err.textContent.trim());
+                        } else {
+                            GM_setValue('exc_completed', JSON.stringify({ code }));
+                        }
                     }
                 }, 8000);
-            }, 800);
-
-            // Cleanup anticipato
-            GM_deleteValue('exc_pending_code');
-            GM_deleteValue('exc_iframe_step');
+            }, 600);
         }
 
         if (document.readyState === 'complete') tryFillUtiliser(0);
@@ -578,31 +566,6 @@
         }
     }
 
-    // ── Poller per completamento Utiliser (bottone 🎁 CARTE) ──────────────────
-    function startCompletionPoller() {
-        GM_deleteValue('exc_completed');
-        const poll = setInterval(() => {
-            const raw = GM_getValue('exc_completed', null);
-            if (!raw) return;
-            clearInterval(poll);
-            GM_deleteValue('exc_completed');
-            try {
-                const { code } = JSON.parse(raw);
-                LOG('🎉 Utiliser completato | code:', code);
-                // Mostra breve notifica
-                const n = document.createElement('div');
-                n.style.cssText =
-                    'position:fixed;bottom:20px;right:20px;background:#28a745;color:#fff;' +
-                    'padding:12px 20px;border-radius:8px;font-family:system-ui;font-weight:bold;' +
-                    'font-size:14px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3)';
-                n.textContent = `✅ Gift card ${code} applicata!`;
-                document.body.appendChild(n);
-                setTimeout(() => n.remove(), 4000);
-            } catch (e) { WARN('Errore parsing exc_completed:', e); }
-        }, 400);
-        setTimeout(() => clearInterval(poll), 90000);
-    }
-
     // ── Trova bottone "Cartes cadeaux" nella sidebar ──────────────────────────
     function findCartesCadeauxBtn() {
         const byText = Array.from(document.querySelectorAll('a, button, [role="button"]')).find(el => {
@@ -616,7 +579,11 @@
         );
     }
 
-    // ── Popup bottone 🎁 CARTE (Utiliser manuale) ─────────────────────────────
+    // ── Popup bottone 🎁 CARTE (Utiliser via iframe nascosto) ────────────────
+    // 1. Cassiere inserisce codice gift card
+    // 2. Script legge URL cartescadeaux da input[name="url_btn"]
+    // 3. Crea iframe fuori schermo → branch cartescadeaux auto-compila e clicca
+    // 4. Poller rileva exc_completed (✅) o exc_error (❌) → rimuove iframe → toast
     function showGiftCardPopup(saleId) {
         if (!saleId) { alert('❌ Sale ID non trovato. Apri prima una vendita.'); return; }
         if (document.getElementById('exc-gc-overlay')) return;
@@ -633,14 +600,14 @@
             <h3 style="margin:0 0 6px;color:#6610f2">🎁 Utiliser une carte cadeau</h3>
             <p style="margin:0 0 16px;font-size:12px;color:#666">Vendita <b>#${saleId}</b></p>
             <label style="font-size:13px;color:#444;font-weight:bold;display:block;margin-bottom:6px">
-              Code carte cadeau
+              Code carte cadeau (S/N)
             </label>
             <input id="exc-gc-code" type="text"
-              placeholder="117482hi176001  oppure  EXC117478"
+              placeholder="ex: 117482hi176001"
               style="width:100%;box-sizing:border-box;padding:11px 12px;border:2px solid #6610f2;
                      border-radius:6px;font-size:15px;outline:none;margin-bottom:8px">
             <p style="font-size:11px;color:#888;margin:0 0 16px">
-              Inserisci il codice → lo script apre l'iframe e applica automaticamente.
+              Inserisci il codice S/N → applica automaticamente senza aprire la pagina.
             </p>
             <div style="display:flex;gap:8px;justify-content:flex-end">
               <button id="exc-gc-cancel" type="button"
@@ -663,21 +630,87 @@
             const code = codeInput.value.trim();
             if (!code) { codeInput.style.borderColor = '#dc3545'; codeInput.focus(); return; }
 
-            GM_setValue('exc_pending_code', code);
-            GM_setValue('exc_iframe_step',  'utiliser');
-            GM_deleteValue('exc_pending_amount');
-            GM_deleteValue('exc_payment_method');
-            overlay.remove();
-
-            startCompletionPoller();
-
-            const btn = findCartesCadeauxBtn();
-            if (btn) {
-                LOG('🎁 CARTE — click Cartes cadeaux | code:', code);
-                btn.click();
-            } else {
-                alert('Clicca "Cartes cadeaux" nel pannello — lo script applicherà ' + code + ' automaticamente.');
+            // Legge URL iframe da input[name="url_btn"] (bottone "Cartes cadeaux" nella pagina)
+            const urlBtn = document.querySelector('input[name="url_btn"]');
+            if (!urlBtn?.value) {
+                alert('❌ URL Cartes cadeaux non trovato.\nAssicurati di essere nella pagina di pagamento.');
+                return;
             }
+
+            overlay.remove();
+            LOG('🎁 Iframe nascosto | code:', code, '| URL:', urlBtn.value.slice(0, 80));
+
+            // Prepara comunicazione cross-domain
+            GM_deleteValue('exc_completed');
+            GM_deleteValue('exc_error');
+            GM_setValue('exc_pending_code', code);
+            GM_setValue('exc_iframe_step', 'utiliser');
+
+            // Iframe fuori schermo — il cassiere non lo vede mai
+            const iframe = document.createElement('iframe');
+            iframe.src = urlBtn.value;
+            iframe.style.cssText =
+                'position:fixed;top:-9999px;left:-9999px;width:1px;height:1px;border:none;';
+            document.body.appendChild(iframe);
+
+            // Spinner di attesa
+            const spinner = document.createElement('div');
+            spinner.id = 'exc-gc-spinner';
+            spinner.style.cssText =
+                'position:fixed;bottom:24px;right:24px;background:#6610f2;color:#fff;' +
+                'padding:12px 20px;border-radius:10px;font-family:system-ui;font-weight:bold;' +
+                'font-size:14px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+            spinner.textContent = '⏳ Application en cours…';
+            document.body.appendChild(spinner);
+
+            function cleanup() {
+                iframe.remove();
+                spinner.remove();
+                GM_deleteValue('exc_completed');
+                GM_deleteValue('exc_error');
+                GM_deleteValue('exc_pending_code');
+                GM_deleteValue('exc_iframe_step');
+            }
+
+            // Poller: attende exc_completed o exc_error dal branch cartescadeaux
+            const poll = setInterval(() => {
+                const done  = GM_getValue('exc_completed', null);
+                const error = GM_getValue('exc_error', null);
+                if (!done && !error) return;
+
+                clearInterval(poll);
+                clearTimeout(safetyTimer);
+                cleanup();
+
+                const n = document.createElement('div');
+                if (done) {
+                    LOG('✅ Gift card applicata | code:', code);
+                    n.style.cssText =
+                        'position:fixed;bottom:24px;right:24px;background:#28a745;color:#fff;' +
+                        'padding:14px 22px;border-radius:10px;font-family:system-ui;font-weight:bold;' +
+                        'font-size:14px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+                    n.innerHTML = `✅ Carte <code style="background:rgba(255,255,255,.2);` +
+                        `padding:2px 6px;border-radius:4px">${code}</code> appliquée !`;
+                    setTimeout(() => n.remove(), 5000);
+                } else {
+                    WARN('❌ Errore Utiliser:', error);
+                    n.style.cssText =
+                        'position:fixed;bottom:24px;right:24px;background:#dc3545;color:#fff;' +
+                        'padding:14px 22px;border-radius:10px;font-family:system-ui;font-weight:bold;' +
+                        'font-size:14px;z-index:99999;box-shadow:0 4px 16px rgba(0,0,0,.3)';
+                    n.innerHTML = `❌ Erreur : <span style="font-weight:normal">${error}</span>`;
+                    setTimeout(() => n.remove(), 8000);
+                }
+                document.body.appendChild(n);
+            }, 500);
+
+            // Safety timeout 60s
+            const safetyTimer = setTimeout(() => {
+                clearInterval(poll);
+                cleanup();
+                WARN('❌ Timeout iframe Utiliser (60s)');
+                alert('❌ Timeout: carte cadeau non applicata.\nVerifica il codice e riprova.');
+            }, 60000);
         };
 
         overlay.querySelector('#exc-gc-cancel').onclick = () => overlay.remove();
@@ -789,73 +822,85 @@
 
     function isOnGiftCardPage() {
         return !!Array.from(document.querySelectorAll('h1,h2,h3,h4')).find(el =>
-            /vendre.{0,6}carte|utiliser.{0,6}carte/i.test(el.textContent || '')
+            /utiliser.{0,10}carte/i.test(el.textContent || '')
         );
     }
 
+    // Trova il form "Utiliser" — ha UN SOLO input (il codice).
+    // Il form "Vendre" ha 3 input (montant, validité, code) — da ignorare.
+    function findUtiliserForm() {
+        const heads = Array.from(document.querySelectorAll('h1,h2,h3,h4,h5,legend,.panel-title'))
+            .filter(el => /utiliser/i.test(el.textContent || ''));
+
+        for (const head of heads) {
+            // Cerca il container padre che contiene esattamente 1 input visibile + 1 bottone
+            let el = head.parentElement;
+            for (let i = 0; i < 10; i++) {
+                if (!el || el === document.body) break;
+                const inputs = Array.from(el.querySelectorAll('input')).filter(
+                    inp => !['hidden','submit','button','checkbox','radio','date'].includes(inp.type)
+                );
+                const btn = el.querySelector('button[type="submit"], input[type="submit"], button:not([type="button"])');
+                // Utiliser ha 1 solo input (il codice). Vendre ne ha 3+.
+                if (inputs.length === 1 && btn) {
+                    return { input: inputs[0], btn, container: el };
+                }
+                el = el.parentElement;
+            }
+        }
+        return null;
+    }
+
+    let _gcPageWatching = false;
     function watchGiftCardPage() {
         if (!isOnGiftCardPage()) return;
+        if (_gcPageWatching) return;
+        _gcPageWatching = true;
+
         const code = GM_getValue('exc_pending_code', null);
         LOG('🎁 Pagina gift card rilevata | exc_pending_code:', code);
 
         // ── Auto-fill form Utiliser se c'è un codice in attesa ───────────────
         if (code) {
             let filled = false;
-            function tryFillUtiliserMain(retries) {
-                retries = retries || 0;
-                if (retries > 40 || filled) return;
+            function tryFill(retries) {
+                if (filled || retries > 40) return;
+                const form = findUtiliserForm();
+                if (!form) { setTimeout(() => tryFill(retries + 1), 300); return; }
 
-                const utiliserHead = Array.from(document.querySelectorAll(
-                    'h1,h2,h3,h4,h5,legend,.panel-title,.card-title'
-                )).find(el => /utiliser/i.test(el.textContent || ''));
-                if (!utiliserHead) { setTimeout(() => tryFillUtiliserMain(retries + 1), 300); return; }
-
-                // Risale al container padre che contiene input + bottone
-                let container = utiliserHead.parentElement;
-                for (let i = 0; i < 8; i++) {
-                    if (!container || container === document.body) break;
-                    const inp = container.querySelector('input:not([type="hidden"]):not([type="submit"]):not([type="button"])');
-                    const btn = container.querySelector('button[type="submit"],input[type="submit"],button:not([type="button"])');
-                    if (inp && btn) {
-                        filled = true;
-                        LOG('🎁 Fill Utiliser | input:', inp.name || inp.placeholder);
-                        setVal(inp, code);
-                        setTimeout(() => {
-                            setVal(inp, code);
-                            btn.click();
-                            GM_deleteValue('exc_pending_code');
-                            GM_deleteValue('exc_iframe_step');
-                        }, 600);
-                        return;
-                    }
-                    container = container.parentElement;
-                }
-                setTimeout(() => tryFillUtiliserMain(retries + 1), 300);
+                filled = true;
+                LOG('🎁 Fill Utiliser | input:', form.input.name || form.input.placeholder);
+                form.container.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                setVal(form.input, code);
+                setTimeout(() => {
+                    setVal(form.input, code); // re-fill sicurezza
+                    LOG('🎁 Click Valider Utiliser');
+                    form.btn.click();
+                    GM_deleteValue('exc_pending_code');
+                    GM_deleteValue('exc_iframe_step');
+                }, 700);
             }
-            setTimeout(() => tryFillUtiliserMain(0), 800);
+            setTimeout(() => tryFill(0), 900);
         }
 
         // ── Watcher successo → click Retour Vente ────────────────────────────
         let redirected = false;
         const gcObs = new MutationObserver(() => {
             if (redirected) return;
-            const ok = document.querySelector('.alert-success, .flash-success, [class*="success"]:not(button)');
-            if (ok && /utilisée|appliqué|succès|success|ok/i.test(ok.textContent || '')) {
+            const ok = document.querySelector('.alert-success,.flash-success,[class*="alert-success"]');
+            if (ok && /utilisée|appliqué|succès|success/i.test(ok.textContent || '')) {
                 redirected = true;
                 gcObs.disconnect();
                 LOG('✅ Gift card utilisée — click Retour Vente dans 1.2s');
                 setTimeout(() => {
                     const retourBtn = findRetourVenteBtn();
-                    if (retourBtn) {
-                        LOG('↩️ Click Retour Vente');
-                        retourBtn.click();
-                    } else {
-                        LOG('↩️ Retour Vente non trovato — popup manuale');
+                    if (retourBtn) { retourBtn.click(); }
+                    else {
                         const n = document.createElement('div');
                         n.style.cssText =
-                            'position:fixed;bottom:20px;right:20px;background:#28a745;color:#fff;' +
+                            'position:fixed;top:10px;right:10px;background:#28a745;color:#fff;' +
                             'padding:14px 20px;border-radius:8px;font-family:system-ui;font-weight:bold;' +
-                            'font-size:14px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3);cursor:pointer';
+                            'font-size:14px;z-index:99999;box-shadow:0 4px 12px rgba(0,0,0,.3)';
                         n.innerHTML = '✅ Carte appliquée !<br><small>Cliquez "Retour Vente"</small>';
                         document.body.appendChild(n);
                         setTimeout(() => n.remove(), 8000);
@@ -864,6 +909,8 @@
             }
         });
         gcObs.observe(document.body, { childList: true, subtree: true });
+        // Reset flag al cambio pagina
+        setTimeout(() => { _gcPageWatching = false; }, 30000);
     }
 
     // ── Iniezione iniziale + observer DOM (dopo check credenziali) ────────────
@@ -891,5 +938,5 @@
         }
     }, 800);
 
-    LOG('UserScript v5.4 (EXC-Change) attivo — USD sale · avoir · chiusura EUR manuale');
+    LOG('UserScript v5.7 (EXC-Change) attivo — USD sale · avoir · chiusura EUR manuale · CARTE iframe nascosto');
 })();
