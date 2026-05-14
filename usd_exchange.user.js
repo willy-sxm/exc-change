@@ -1,11 +1,12 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.7
-// @description  EXC-Change v5.7: bottone CARTE usa iframe nascosto · zero navigazione · toast verde/rosso
+// @version      5.8
+// @description  EXC-Change v5.8: fix currency.hiboutik.net (nuovo URL gift card Hiboutik)
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
+// @match        https://currency.hiboutik.net/*
 // @updateURL    https://raw.githubusercontent.com/willy-sxm/exc-change/main/usd_exchange.user.js
 // @downloadURL  https://raw.githubusercontent.com/willy-sxm/exc-change/main/usd_exchange.user.js
 // @grant        GM_setValue
@@ -157,7 +158,7 @@
     // BRANCH: cartescadeaux.hiboutik.net
     // Usato SOLO dal bottone 🎁 CARTE per applicare manualmente una gift card (Utiliser).
     // ════════════════════════════════════════════════════════════════════════════
-    if (HOST === 'cartescadeaux.hiboutik.net') {
+    if (HOST === 'cartescadeaux.hiboutik.net' || HOST === 'currency.hiboutik.net') {
         const LG = (...a) => console.log('%c[EXC iframe]', 'color:#6610f2;font-weight:bold', ...a);
 
         const step = GM_getValue('exc_iframe_step', '');
