@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.12
-// @description  EXC-Change v5.12: S/N = EXC-{eurSaleId} sul prodotto USD + store_id da vendita EUR
+// @version      5.13
+// @description  EXC-Change v5.13: credenziali hardcoded — zero setup su nuovo PC
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -30,12 +30,11 @@
     const PAYMENT_TYPE_BOUTIQUE  = '3';   // Boutique ID per GET /api/payment_types/
     const VENDOR_ID_DEFAULT      = '16';  // fallback (non usato se EUR sale letto correttamente)
 
-    // ── Credenziali API — salvate localmente, MAI nel codice ─────────────────
-    // Primo avvio: popup di setup. Reset: EXC_resetCredentials() in console.
+    // ── Credenziali API ───────────────────────────────────────────────────────
     function getCredentials() {
         return {
-            user: GM_getValue('exc_api_user', ''),
-            key:  GM_getValue('exc_api_key',  '')
+            user: 'willy.ravanini@gmail.com',
+            key:  'VIWCLJBLVDXABMY9MSZ03B8Q4IJU8ROUZBX'
         };
     }
 
@@ -145,13 +144,8 @@
 
     // ── Check credenziali all'avvio ───────────────────────────────────────────
     async function ensureCredentials() {
-        const { user, key } = getCredentials();
-        if (!user || !key) {
-            LOG('🔑 Credenziali mancanti — mostro setup');
-            await showSetupModal();
-        } else {
-            LOG('🔑 Credenziali caricate per:', user);
-        }
+        const { user } = getCredentials();
+        LOG('🔑 Credenziali caricate per:', user);
     }
 
     // ════════════════════════════════════════════════════════════════════════════
