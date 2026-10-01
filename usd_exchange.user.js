@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Hiboutik EXC-Change (USD 1:1)
 // @namespace    http://tampermonkey.net/
-// @version      5.13
-// @description  EXC-Change v5.13: credenziali hardcoded — zero setup su nuovo PC
+// @version      5.14
+// @description  EXC-Change v5.14: credenziali hardcoded — zero setup su nuovo PC
 // @author       Willy Ravanini – Tropical Tech Properties
 // @match        https://lipstick.hiboutik.com/*
 // @match        https://cartescadeaux.hiboutik.net/*
@@ -747,7 +747,8 @@
     // Trova il bottone "Ouverture tiroir" per ancorare i nostri bottoni sotto di lui
     function findOuvertureTiroir() {
         return Array.from(document.querySelectorAll('button, a')).find(el =>
-            /ouverture.{0,6}tiroir/i.test(el.textContent || '')
+            /ouverture.{0,6}tiroir/i.test(el.textContent || '') ||
+            /open.{0,6}cash.{0,6}drawer/i.test(el.textContent || '')
         );
     }
 
